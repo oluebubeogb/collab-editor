@@ -105,7 +105,6 @@ const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
   useEffect(() => {
     // Monaco global theme
     try {
-      // @ts-expect-error monaco may be on window after load
       const m = (window as unknown as { monaco?: { editor: { setTheme: (t: string) => void } } }).monaco
       m?.editor?.setTheme(monacoTheme)
     } catch {

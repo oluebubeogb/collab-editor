@@ -718,8 +718,10 @@ export default function Home() {
                   id: e.id,
                   description: e.description,
                   isPublic: e.isPublic,
-                  ownerId: e.ownerId,
-                  ownerName: e.ownerName
+                  ownerId: e.ownerId ?? null,
+                  ownerName: e.ownerName ?? null,
+                  createdAt: 0,
+                  updatedAt: e.updatedAt ?? 0
                 }))}
                 label="Editor access"
                 icon="fa-user-pen"

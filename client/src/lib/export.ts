@@ -40,15 +40,17 @@ export async function exportRoomAsZip(
   binaries: Record<string, string>,
   roomId: string
 ) {
-  let JSZip: typeof import('jszip').default
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let JSZipCtor: any
   try {
-    JSZip = (await import('jszip')).default
+    const mod = await import('jszip')
+    JSZipCtor = mod.default ?? mod
   } catch {
     window.alert('ZIP export requires the jszip package. Run: npm install jszip')
     return
   }
 
-  const zip = new JSZip()
+  const zip = new JSZipCtor()
   for (const { path, meta } of entries) {
     if (meta.type === 'folder') {
       zip.folder(path)

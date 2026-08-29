@@ -2,6 +2,9 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import fs from 'fs'
 import path from 'path'
+import { fileURLToPath } from 'url'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 /**
  * Optional HTTPS for LAN access (mic / WebRTC / clipboard).
@@ -30,7 +33,7 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     strictPort: true,
-	allowedHosts: true,
+    allowedHosts: true,
     https,
     // HMR over WSS when using HTTPS
     hmr: https

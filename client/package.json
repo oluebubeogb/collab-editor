@@ -23,6 +23,7 @@
     "yjs": "^13.6.20"
   },
   "devDependencies": {
+    "@types/node": "^22.20.1",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",

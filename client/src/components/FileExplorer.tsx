@@ -62,11 +62,11 @@ interface FileExplorerProps {
   readonly?: boolean
   generalUnread?: number
   editorsUnread?: number
-  voiceChannel?: 'general' | 'editors' | null
+  voiceChannel?: string | null
   voiceJoining?: boolean
   onOpen: (path: string) => void
   onOpenChat: (channel: string) => void
-  onJoinVoice?: (channel: 'general' | 'editors') => void
+  onJoinVoice?: (channel: string) => void
   onLeaveVoice?: () => void
   onCreateFile: (parentFolder: string | null) => void
   onCreateFolder: (parentFolder: string | null) => void

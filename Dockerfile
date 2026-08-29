@@ -1,5 +1,5 @@
 # ---- build client ----
-FROM node:20-bookworm AS client-build
+FROM node:22-bookworm AS client-build
 WORKDIR /app/client
 COPY client/package*.json ./
 RUN npm ci
@@ -12,7 +12,7 @@ ENV VITE_WS_URL=$VITE_WS_URL
 RUN npm run build
 
 # ---- server (API + WS + static SPA) ----
-FROM node:20-bookworm
+FROM node:22-bookworm
 WORKDIR /app
 
 # better-sqlite3 and y-leveldb need native toolchain

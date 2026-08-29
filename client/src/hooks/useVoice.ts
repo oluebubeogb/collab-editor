@@ -174,7 +174,7 @@ export function useVoice(opts: {
         setPeers((prev) =>
           prev.map((p) =>
             p.clientId === peerId
-              ? { ...p, connected: state === 'connected' || state === 'completed' }
+              ? { ...p, connected: state === 'connected' }
               : p
           )
         )

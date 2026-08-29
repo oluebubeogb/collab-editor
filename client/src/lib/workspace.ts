@@ -58,7 +58,7 @@ export function saveUserPrefs(prefs: UserPrefs) {
   }
 }
 
-export function loadVoiceRejoin(roomId: string): 'general' | 'editors' | null {
+export function loadVoiceRejoin(roomId: string): string | null {
   try {
     const raw = localStorage.getItem(VOICE_REJOIN_KEY)
     if (!raw) return null
@@ -70,7 +70,7 @@ export function loadVoiceRejoin(roomId: string): 'general' | 'editors' | null {
   }
 }
 
-export function saveVoiceRejoin(roomId: string, channel: 'general' | 'editors' | null) {
+export function saveVoiceRejoin(roomId: string, channel: string | null) {
   try {
     const raw = localStorage.getItem(VOICE_REJOIN_KEY)
     const data = raw ? JSON.parse(raw) : {}
