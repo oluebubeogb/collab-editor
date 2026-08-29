@@ -1,0 +1,179 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Design tokens ───────────────────────────────────────── */
+
+/*
+  LIGHT MODE — ChatGPT-like calm / milky surfaces
+  Soft layered off-whites, charcoal text, muted purple only as accent.
+*/
+:root,
+html.light {
+  --surface-0: #f7f7f5;
+  --surface-1: #fafaf8;
+  --surface-2: #f8f8f6;
+  --surface-3: #ebebe8;
+  --surface-editor: #fbfbf9;
+  --surface-console: #f1f1ef;
+  --surface-preview: #f2f2f0;
+  --surface-preview-inner: #ffffff;
+  --surface-card: #ececea;
+
+  --ink: #1f1f1f;
+  --ink-muted: #4a4a4a;
+  --ink-soft: #777777;
+  --ink-faint: #999999;
+
+  --line: #e2e2de;
+  --line-soft: #dededa;
+
+  --rail: #f3f3f1;
+  --preview-bg: #f2f2f0;
+
+  --accent: #6d5bd0;
+  --accent-soft: #e9e5f7;
+  --accent-hover: #e7e2fa;
+
+  --icon: #3a3a3a;
+  --icon-muted: #5e5e5e;
+  --icon-faint: #8a8a8a;
+
+  --success: #3a9b67;
+  --danger: #c94c4c;
+
+  --tooltip-bg: #ffffff;
+  --tooltip-fg: #1f1f1f;
+  --tooltip-border: #e2e2de;
+  --tooltip-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  --shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.08);
+
+  color-scheme: light;
+}
+
+html.dark {
+  --surface-0: #0a0a0b;
+  --surface-1: #111113;
+  --surface-2: #18181b;
+  --surface-3: #27272a;
+  --surface-editor: #0c0c0e;
+  --surface-console: #111113;
+  --surface-preview: #0f0f12;
+  --surface-preview-inner: #ffffff;
+  --surface-card: #18181b;
+
+  --ink: #f4f4f5;
+  --ink-muted: #d4d4d8;
+  --ink-soft: #a1a1aa;
+  --ink-faint: #71717a;
+
+  --line: #27272a;
+  --line-soft: #1f1f23;
+
+  --rail: #0c0c0e;
+  --preview-bg: #0f0f12;
+
+  --accent: #8b5cf6;
+  --accent-soft: rgba(139, 92, 246, 0.18);
+  --accent-hover: rgba(139, 92, 246, 0.28);
+
+  --icon: #d4d4d8;
+  --icon-muted: #a1a1aa;
+  --icon-faint: #71717a;
+
+  --success: #22c55e;
+  --danger: #ef4444;
+
+  --tooltip-bg: #27272a;
+  --tooltip-fg: #fafafa;
+  --tooltip-border: #3f3f46;
+  --tooltip-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.4);
+
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: var(--surface-0);
+  color: var(--ink);
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-3) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@layer components {
+  .tooltip-wrap {
+    @apply relative;
+  }
+  .tooltip-wrap .tooltip {
+    @apply pointer-events-none absolute left-full top-1/2 z-50 ml-2 -translate-y-1/2 whitespace-nowrap rounded-md px-2 py-1 text-[11px] opacity-0 transition-opacity duration-150;
+    background: var(--tooltip-bg);
+    color: var(--tooltip-fg);
+    border: 1px solid var(--tooltip-border);
+    box-shadow: var(--tooltip-shadow);
+  }
+  .tooltip-wrap:hover .tooltip,
+  .tooltip-wrap:focus-within .tooltip {
+    @apply opacity-100;
+  }
+
+  .icon-btn {
+    @apply flex h-9 w-9 items-center justify-center rounded-lg transition-colors duration-150;
+    color: var(--icon-muted);
+  }
+  .icon-btn:hover {
+    background: var(--surface-3);
+    color: var(--icon);
+  }
+  .icon-btn.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[11px];
+    border-color: var(--line);
+    background: var(--surface-2);
+    color: var(--ink-soft);
+  }
+
+  .panel-label {
+    @apply text-[10px] font-semibold uppercase tracking-wider;
+    color: var(--ink-faint);
+  }
+}
+
+html.light .monaco-editor,
+html.light .monaco-editor-background,
+html.light .monaco-editor .margin {
+  background-color: var(--surface-editor) !important;
+}

@@ -1,0 +1,14 @@
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+server/data
+client/certs
+server/certs
+**/*.log
+**/*.tsbuildinfo
+.git
+.DS_Store
+*.md
+!README.md
