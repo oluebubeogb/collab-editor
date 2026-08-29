@@ -2,7 +2,7 @@
 FROM node:22-bookworm AS client-build
 WORKDIR /app/client
 COPY client/package*.json ./
-RUN npm ci
+RUN npm ci --registry https://registry.npmjs.org/
 COPY client/ ./
 # Optional: bake public API/WS URLs at build time (same-origin → leave empty)
 ARG VITE_API_URL=
@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 
 COPY server/package*.json ./server/
 WORKDIR /app/server
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --registry https://registry.npmjs.org/
 
 COPY server/ ./
 COPY --from=client-build /app/client/dist /app/client/dist
