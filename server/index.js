@@ -267,6 +267,12 @@ function nanoid(size = 16) {
 // ── API router ─────────────────────────────────────────────────────
 async function handleApi(req, res, pathname) {
   const secure = !!(req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https')
+  
+  // inside handleApi, near the top
+if (pathname === '/api/health' && req.method === 'GET') {
+  sendJson(res, 200, { ok: true })
+  return
+}
 
   if (req.method === 'OPTIONS') {
     sendJson(res, 204, {})
