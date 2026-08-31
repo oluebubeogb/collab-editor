@@ -6,19 +6,9 @@
 function resolveApiBase(): string {
   const fromEnv = (import.meta.env.VITE_API_URL as string | undefined)?.trim()
   if (fromEnv) return fromEnv.replace(/\/$/, '')
-  if (typeof window !== 'undefined' && window.location?.hostname) {
-    const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:'
-    // Default: API shares the y-websocket host on :1234
-    const wsEnv = (import.meta.env.VITE_WS_URL as string | undefined)?.trim()
-    if (wsEnv) {
-      try {
-        const u = new URL(wsEnv.replace(/^ws/, 'http'))
-        return `${u.protocol}//${u.host}`
-      } catch {
-        /* fall through */
-      }
-    }
-    return `${protocol}//${window.location.hostname}:1234`
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    // Same-origin (Coolify): SPA + API on the public URL, no :1234
+    return window.location.origin
   }
   return 'http://localhost:1234'
 }

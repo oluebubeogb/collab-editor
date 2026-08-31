@@ -34,9 +34,10 @@ export interface FileMetaValue {
 function resolveWsUrl(): string {
   const fromEnv = (import.meta.env.VITE_WS_URL as string | undefined)?.trim()
   if (fromEnv) return fromEnv
-  if (typeof window !== 'undefined' && window.location?.hostname) {
+  if (typeof window !== 'undefined' && window.location?.host) {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    return `${protocol}//${window.location.hostname}:1234`
+    // Same-origin: use host as-is (no forced :1234)
+    return `${protocol}//${window.location.host}`
   }
   return 'ws://localhost:1234'
 }
