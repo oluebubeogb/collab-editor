@@ -716,11 +716,31 @@ export default function Room() {
     (parentFolder: string | null, fileList: FileList) => {
       if (readonly) return
       Array.from(fileList).forEach((file) => {
-        const path = parentFolder ? `${parentFolder}/${file.name}` : file.name
+        const relative =
+          (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+        const path = parentFolder ? `${parentFolder}/${relative}` : relative
+        // Ensure parent folders exist for nested uploads (folder select)
+        const parts = path.split('/')
+        if (parts.length > 1) {
+          let current = ''
+          for (let i = 0; i < parts.length - 1; i++) {
+            current = current ? `${current}/${parts[i]}` : parts[i]
+            if (!filesMeta().has(current)) {
+              createFolder(current)
+            }
+          }
+        }
         uploadFile(path, file)
       })
     },
-    [uploadFile, readonly]
+    [uploadFile, createFolder, filesMeta, readonly]
+  )
+
+  const handleDownload = useCallback(
+    (path: string) => {
+      downloadFile(path, fileTexts(), fileBinaries())
+    },
+    [fileTexts, fileBinaries]
   )
 
   const handleDelete = useCallback(
@@ -1098,6 +1118,16 @@ if (!ready) {
           <button type="button" className="w-full rounded-lg px-3 py-2 text-left text-xs hover:bg-[var(--surface-3)]" onClick={() => { setShowComments(true); setShareOpen(false) }}>
             Comments
           </button>
+          <button
+            type="button"
+            className="w-full rounded-lg px-3 py-2 text-left text-xs hover:bg-[var(--surface-3)]"
+            onClick={() => {
+              void exportRoomAsZip(entries, fileTexts(), fileBinaries(), roomId)
+              setShareOpen(false)
+            }}
+          >
+            Export ZIP
+          </button>
         </div>
       )}
 
@@ -1183,6 +1213,7 @@ if (!ready) {
               onRename={handleRename}
               onMove={handleMove}
               onSetPreviewEntry={setPreviewEntryPath}
+              onDownload={handleDownload}
             />
           </div>
           <div style={{ width: 240 }}>

@@ -75,6 +75,7 @@ interface FileExplorerProps {
   onRename: (oldPath: string, newPath: string) => void
   onMove: (oldPath: string, newParentFolder: string | null) => void
   onSetPreviewEntry: (path: string) => void
+  onDownload: (path: string) => void
 }
 
 export default function FileExplorer({
@@ -96,7 +97,8 @@ export default function FileExplorer({
   onDelete,
   onRename,
   onMove,
-  onSetPreviewEntry
+  onSetPreviewEntry,
+  onDownload
 }: FileExplorerProps) {
   const tree = useMemo(() => buildTree(entries), [entries])
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
@@ -129,7 +131,7 @@ export default function FileExplorer({
               +d
             </button>
             <button
-              title="Upload file"
+              title="Upload file or folder"
               onClick={triggerUpload}
               className="w-6 h-6 rounded hover:bg-[var(--surface-3)] text-ink-soft hover:text-ink"
             >
@@ -139,6 +141,8 @@ export default function FileExplorer({
               ref={uploadInputRef}
               type="file"
               multiple
+              // Enable folder selection (preserves structure via webkitRelativePath)
+              {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
               className="hidden"
               onChange={(e) => {
                 if (e.target.files && e.target.files.length > 0) {
@@ -170,7 +174,7 @@ export default function FileExplorer({
       >
         {tree.length === 0 && (
           <p className="text-xs text-ink-faint px-3 py-4">
-            No files yet. Use +f / +d above, or upload one.
+            No files yet. Use +f / +d above, or upload files / a folder.
           </p>
         )}
         {tree.map((node) => (
@@ -198,6 +202,7 @@ export default function FileExplorer({
                 setDropTarget(null)
               }
             }}
+            onDownload={onDownload}
           />
         ))}
       </div>
@@ -222,6 +227,7 @@ interface TreeRowProps {
   onDragStart: (path: string | null) => void
   onDragOverTarget: (path: string | null) => void
   onDropOnFolder: (folder: string) => void
+  onDownload: (path: string) => void
 }
 
 function TreeRow({
@@ -240,7 +246,8 @@ function TreeRow({
   onSetPreviewEntry,
   onDragStart,
   onDragOverTarget,
-  onDropOnFolder
+  onDropOnFolder,
+  onDownload
 }: TreeRowProps) {
   const [expanded, setExpanded] = useState(true)
   const [editing, setEditing] = useState(false)
@@ -355,6 +362,18 @@ function TreeRow({
             {isPreviewEntry ? '● preview' : 'preview'}
           </button>
         )}
+        {!node.isFolder && (
+          <button
+            title="Download"
+            onClick={(e) => {
+              e.stopPropagation()
+              onDownload(node.path)
+            }}
+            className="opacity-0 group-hover:opacity-100 text-ink-faint hover:text-brand text-xs px-1"
+          >
+            ↓
+          </button>
+        )}
         {!readonly && (
           <>
             <button
@@ -403,6 +422,7 @@ function TreeRow({
               onDragStart={onDragStart}
               onDragOverTarget={onDragOverTarget}
               onDropOnFolder={onDropOnFolder}
+              onDownload={onDownload}
             />
           ))}
         </div>
