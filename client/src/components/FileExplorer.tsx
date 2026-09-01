@@ -104,9 +104,8 @@ export default function FileExplorer({
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
   const [dragPath, setDragPath] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
-  const uploadInputRef = useRef<HTMLInputElement>(null)
-
-  const triggerUpload = () => uploadInputRef.current?.click()
+  const uploadFileInputRef = useRef<HTMLInputElement>(null)
+  const uploadFolderInputRef = useRef<HTMLInputElement>(null)
 
   return (
     <div className="h-full flex flex-col text-ink" style={{ background: "var(--surface-1)" }}>
@@ -124,6 +123,13 @@ export default function FileExplorer({
               +f
             </button>
             <button
+              title="Upload file"
+              onClick={() => uploadFileInputRef.current?.click()}
+              className="w-6 h-6 rounded hover:bg-[var(--surface-3)] text-ink-soft hover:text-ink"
+            >
+              ↑f
+            </button>
+            <button
               title="New folder"
               onClick={() => onCreateFolder(selectedFolder)}
               className="w-6 h-6 rounded hover:bg-[var(--surface-3)] text-ink-soft hover:text-ink"
@@ -131,17 +137,29 @@ export default function FileExplorer({
               +d
             </button>
             <button
-              title="Upload file or folder"
-              onClick={triggerUpload}
+              title="Upload folder"
+              onClick={() => uploadFolderInputRef.current?.click()}
               className="w-6 h-6 rounded hover:bg-[var(--surface-3)] text-ink-soft hover:text-ink"
             >
-              ↑
+              ↑d
             </button>
             <input
-              ref={uploadInputRef}
+              ref={uploadFileInputRef}
               type="file"
               multiple
-              // Enable folder selection (preserves structure via webkitRelativePath)
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  onUpload(selectedFolder, e.target.files)
+                }
+                e.target.value = ''
+              }}
+            />
+            <input
+              ref={uploadFolderInputRef}
+              type="file"
+              multiple
+              // Folder picker — preserves structure via webkitRelativePath
               {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
               className="hidden"
               onChange={(e) => {
@@ -174,7 +192,7 @@ export default function FileExplorer({
       >
         {tree.length === 0 && (
           <p className="text-xs text-ink-faint px-3 py-4">
-            No files yet. Use +f / +d above, or upload files / a folder.
+            No files yet. Use +f / ↑f / +d / ↑d above.
           </p>
         )}
         {tree.map((node) => (

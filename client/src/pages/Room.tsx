@@ -736,12 +736,12 @@ export default function Room() {
     [uploadFile, createFolder, filesMeta, readonly]
   )
 
-const handleDownload = useCallback(
-  (path: string) => {
-    downloadFile(path, texts, binaries)
-  },
-  [texts, binaries]
-)
+  const handleDownload = useCallback(
+    (path: string) => {
+      downloadFile(path, texts, binaries)
+    },
+    [texts, binaries]
+  )
 
   const handleDelete = useCallback(
     (path: string) => {
@@ -1121,10 +1121,10 @@ if (!ready) {
           <button
             type="button"
             className="w-full rounded-lg px-3 py-2 text-left text-xs hover:bg-[var(--surface-3)]"
-			onClick={() => {
-				void exportRoomAsZip(entries, texts, binaries, roomId)
-				setShareOpen(false)
-			}}
+            onClick={() => {
+              void exportRoomAsZip(entries, texts, binaries, roomId)
+              setShareOpen(false)
+            }}
           >
             Export ZIP
           </button>
