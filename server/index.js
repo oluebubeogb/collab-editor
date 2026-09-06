@@ -37,7 +37,13 @@ const db = require('./db')
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data')
 const PASSWORDS_FILE = path.join(DATA_DIR, 'room-passwords.json')
 const SESSION_COOKIE = 'collab_session'
+const ACCESS_COOKIE = process.env.AUTH_COOKIE_NAME || 'access_token'
 const BCRYPT_ROUNDS = 10
+const ACCOUNTS_URL = (process.env.ACCOUNTS_URL || '').replace(/\/$/, '')
+const USE_ACCOUNTS = Boolean(ACCOUNTS_URL) && process.env.USE_ACCOUNTS !== 'false'
+const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || ''
+const COOKIE_SAMESITE = process.env.COOKIE_SAMESITE || 'Lax'
+
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true })
@@ -209,41 +215,144 @@ function sendJson(res, status, data, extraHeaders = {}) {
   res.end(body)
 }
 
-function setSessionCookie(token, secure) {
+function cookieDomainPart() {
+  return COOKIE_DOMAIN ? `; Domain=${COOKIE_DOMAIN}` : ''
+}
+
+function setSessionCookie(token, secure, cookieName = SESSION_COOKIE) {
   const maxAge = Math.floor(db.SESSION_TTL_MS / 1000)
-  // Cross-origin tunnels (ui.* → ws.*) need SameSite=None; Secure so the browser stores the cookie
-  const sameSite = secure ? 'None' : 'Lax'
+  // Shared parent domain (Accounts SSO) prefers configured SameSite; cross-origin tunnels still use None when secure
+  let sameSite = COOKIE_SAMESITE || (secure ? 'None' : 'Lax')
+  if (secure && sameSite.toLowerCase() === 'none') sameSite = 'None'
   const parts = [
-    `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    `${cookieName}=${encodeURIComponent(token)}`,
     'Path=/',
     `Max-Age=${maxAge}`,
     'HttpOnly',
     `SameSite=${sameSite}`
   ]
+  if (COOKIE_DOMAIN) parts.push(`Domain=${COOKIE_DOMAIN}`)
   if (secure || sameSite === 'None') parts.push('Secure')
   return { 'Set-Cookie': parts.join('; ') }
+}
+
+/** Set both access_token (SSO) and optional legacy collab_session */
+function setAuthCookies(accessToken, secure, localSessionToken) {
+  const cookies = [setSessionCookie(accessToken, secure, ACCESS_COOKIE)['Set-Cookie']]
+  if (localSessionToken) {
+    cookies.push(setSessionCookie(localSessionToken, secure, SESSION_COOKIE)['Set-Cookie'])
+  }
+  return { 'Set-Cookie': cookies }
 }
 
 function clearSessionCookie(secure) {
-  const sameSite = secure ? 'None' : 'Lax'
-  const parts = [
-    `${SESSION_COOKIE}=`,
-    'Path=/',
-    'Max-Age=0',
-    'HttpOnly',
-    `SameSite=${sameSite}`
-  ]
-  if (secure || sameSite === 'None') parts.push('Secure')
-  return { 'Set-Cookie': parts.join('; ') }
+  const sameSite = COOKIE_SAMESITE || (secure ? 'None' : 'Lax')
+  function clearOne(name) {
+    const parts = [
+      `${name}=`,
+      'Path=/',
+      'Max-Age=0',
+      'HttpOnly',
+      `SameSite=${sameSite}`
+    ]
+    if (COOKIE_DOMAIN) parts.push(`Domain=${COOKIE_DOMAIN}`)
+    if (secure || sameSite === 'None') parts.push('Secure')
+    return parts.join('; ')
+  }
+  return {
+    'Set-Cookie': [clearOne(ACCESS_COOKIE), clearOne(SESSION_COOKIE), clearOne('refresh_token')]
+  }
 }
 
-function getAuthUser(req) {
+async function accountsFetchMe(token) {
+  if (!USE_ACCOUNTS || !token) return null
+  try {
+    const res = await fetch(`${ACCOUNTS_URL}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (!res.ok) return null
+    return await res.json()
+  } catch {
+    return null
+  }
+}
+
+async function accountsLogin(email, password) {
+  const res = await fetch(`${ACCOUNTS_URL}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    const err = typeof data.detail === 'string' ? data.detail : data.error || 'Invalid email or password'
+    throw new Error(err)
+  }
+  return data
+}
+
+async function accountsSignup(payload) {
+  const res = await fetch(`${ACCOUNTS_URL}/auth/signup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    let err = data.error || data.detail || 'Signup failed'
+    if (Array.isArray(data.detail)) {
+      err = data.detail.map((d) => d.msg || JSON.stringify(d)).join('; ')
+    }
+    throw new Error(typeof err === 'string' ? err : 'Signup failed')
+  }
+  return data
+}
+
+async function accountsUpdateMe(token, patch) {
+  const res = await fetch(`${ACCOUNTS_URL}/auth/me`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(patch)
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error(typeof data.detail === 'string' ? data.detail : 'Update failed')
+  }
+  return data
+}
+
+async function getAuthUser(req) {
   const cookies = parseCookies(req.headers.cookie)
-  let token = cookies[SESSION_COOKIE]
+  let token =
+    cookies[ACCESS_COOKIE] ||
+    cookies[SESSION_COOKIE] ||
+    null
   if (!token && req.headers.authorization) {
     const m = String(req.headers.authorization).match(/^Bearer\s+(.+)$/i)
     if (m) token = m[1]
   }
+  if (!token) return null
+
+  // Prefer Accounts validation
+  if (USE_ACCOUNTS) {
+    const profile = await accountsFetchMe(token)
+    if (profile && profile.id) {
+      const local = db.ensureLocalUserFromAccounts(profile)
+      return {
+        id: local.id,
+        email: local.email,
+        displayName: local.displayName,
+        color: local.color || profile.avatar_color || null,
+        token,
+        accountsId: profile.id
+      }
+    }
+  }
+
+  // Legacy local session token
   const session = db.getSession(token)
   if (!session) return null
   const full = db.getUserById(session.userId)
@@ -289,6 +398,39 @@ if (pathname === '/api/health' && req.method === 'GET') {
       if (!isValidEmail(email)) return sendJson(res, 400, { error: 'Invalid email' })
       if (password.length < 6) return sendJson(res, 400, { error: 'Password must be at least 6 characters' })
       if (displayName.length > 40) return sendJson(res, 400, { error: 'Display name too long' })
+
+      if (USE_ACCOUNTS) {
+        // username from displayName for Accounts (min 3)
+        let username = displayName.toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 32)
+        if (username.length < 3) username = (email.split('@')[0] + 'user').slice(0, 32)
+        const result = await accountsSignup({
+          email: email.toLowerCase(),
+          password,
+          display_name: displayName,
+          username
+        })
+        const profile = result.user
+        const accessToken = result.access_token
+        const local = db.ensureLocalUserFromAccounts(profile)
+        const localTok = nanoid(32)
+        db.createSession(local.id, localTok)
+        sendJson(
+          res,
+          201,
+          {
+            user: {
+              id: local.id,
+              email: local.email,
+              displayName: local.displayName,
+              color: local.color || null,
+              createdAt: local.createdAt
+            }
+          },
+          setAuthCookies(accessToken, secure, localTok)
+        )
+        return
+      }
+
       if (db.getUserByEmail(email)) return sendJson(res, 409, { error: 'Email already registered' })
       const id = nanoid(20)
       const passwordHash = bcrypt.hashSync(password, BCRYPT_ROUNDS)
@@ -308,6 +450,29 @@ if (pathname === '/api/health' && req.method === 'GET') {
       const body = await readBody(req)
       const email = (body.email || '').trim()
       const password = body.password || ''
+
+      if (USE_ACCOUNTS) {
+        const result = await accountsLogin(email.toLowerCase(), password)
+        const local = db.ensureLocalUserFromAccounts(result.user)
+        const localTok = nanoid(32)
+        db.createSession(local.id, localTok)
+        sendJson(
+          res,
+          200,
+          {
+            user: {
+              id: local.id,
+              email: local.email,
+              displayName: local.displayName,
+              color: local.color || null,
+              createdAt: local.createdAt
+            }
+          },
+          setAuthCookies(result.access_token, secure, localTok)
+        )
+        return
+      }
+
       const row = db.getUserByEmail(email)
       if (!row || !bcrypt.compareSync(password, row.passwordHash)) {
         return sendJson(res, 401, { error: 'Invalid email or password' })
@@ -336,7 +501,7 @@ if (pathname === '/api/health' && req.method === 'GET') {
 
   // POST /api/auth/logout
   if (pathname === '/api/auth/logout' && req.method === 'POST') {
-    const user = getAuthUser(req)
+    const user = await getAuthUser(req)
     if (user) db.deleteSession(user.token)
     sendJson(res, 200, { ok: true }, clearSessionCookie(secure))
     return
@@ -344,7 +509,7 @@ if (pathname === '/api/health' && req.method === 'GET') {
 
   // GET /api/auth/me
   if (pathname === '/api/auth/me' && req.method === 'GET') {
-    const user = getAuthUser(req)
+    const user = await getAuthUser(req)
     if (!user) return sendJson(res, 401, { error: 'Not signed in' })
     sendJson(res, 200, {
       user: { id: user.id, email: user.email, displayName: user.displayName, color: user.color }
@@ -354,7 +519,7 @@ if (pathname === '/api/health' && req.method === 'GET') {
 
   // PUT /api/auth/me  { displayName?, color? }
   if (pathname === '/api/auth/me' && req.method === 'PUT') {
-    const user = getAuthUser(req)
+    const user = await getAuthUser(req)
     if (!user) return sendJson(res, 401, { error: 'Not signed in' })
     try {
       const body = await readBody(req)
@@ -372,6 +537,19 @@ if (pathname === '/api/health' && req.method === 'GET') {
       if (!Object.keys(patch).length) {
         return sendJson(res, 400, { error: 'Nothing to update' })
       }
+
+      if (USE_ACCOUNTS && user.token) {
+        const accountsPatch = {}
+        if (patch.displayName) accountsPatch.display_name = patch.displayName
+        if (patch.color) accountsPatch.avatar_color = patch.color
+        try {
+          const profile = await accountsUpdateMe(user.token, accountsPatch)
+          if (profile) db.ensureLocalUserFromAccounts(profile)
+        } catch (e) {
+          // still update local
+        }
+      }
+
       const updated = db.updateUserProfile(user.id, patch)
       sendJson(res, 200, { user: updated })
     } catch (e) {
@@ -382,7 +560,7 @@ if (pathname === '/api/health' && req.method === 'GET') {
 
   // GET /api/rooms?q=&mine=1  search / list (public-only unless mine)
   if (pathname === '/api/rooms' && req.method === 'GET') {
-    const user = getAuthUser(req)
+    const user = await getAuthUser(req)
     const url = new URL(req.url, `http://${req.headers.host}`)
     const q = url.searchParams.get('q') || ''
     const mine = url.searchParams.get('mine') === '1'
@@ -400,7 +578,7 @@ if (pathname === '/api/health' && req.method === 'GET') {
 
   // GET /api/rooms/editorial — rooms where user is invited/editor (not owner)
   if (pathname === '/api/rooms/editorial' && req.method === 'GET') {
-    const user = getAuthUser(req)
+    const user = await getAuthUser(req)
     if (!user) return sendJson(res, 401, { error: 'Not signed in' })
     sendJson(res, 200, { rooms: db.listEditorialRooms(user.id) })
     return
@@ -409,7 +587,7 @@ if (pathname === '/api/health' && req.method === 'GET') {
   // GET /api/rooms/:id/access — current user's access + pwd if any
   const accessGetMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/access$/)
   if (accessGetMatch && req.method === 'GET') {
-    const user = getAuthUser(req)
+    const user = await getAuthUser(req)
     if (!user) return sendJson(res, 401, { error: 'Not signed in' })
     const roomId = decodeURIComponent(accessGetMatch[1])
     const room = db.getRoom(roomId)
@@ -431,7 +609,7 @@ if (pathname === '/api/health' && req.method === 'GET') {
 
   // POST /api/rooms/:id/access  { role?, roomPwd? } — remember access/password
   if (accessGetMatch && req.method === 'POST') {
-    const user = getAuthUser(req)
+    const user = await getAuthUser(req)
     if (!user) return sendJson(res, 401, { error: 'Not signed in' })
     try {
       const body = await readBody(req)
@@ -460,7 +638,7 @@ if (pathname === '/api/health' && req.method === 'GET') {
   // POST /api/rooms/:id/invite  { email } — invite by email as editor (syncs pwd)
   const inviteMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/invite$/)
   if (inviteMatch && req.method === 'POST') {
-    const user = getAuthUser(req)
+    const user = await getAuthUser(req)
     if (!user) return sendJson(res, 401, { error: 'Not signed in' })
     try {
       const body = await readBody(req)
@@ -508,7 +686,7 @@ if (pathname === '/api/health' && req.method === 'GET') {
   // POST /api/rooms/:id/access/seen
   const accessSeenMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/access\/seen$/)
   if (accessSeenMatch && req.method === 'POST') {
-    const user = getAuthUser(req)
+    const user = await getAuthUser(req)
     if (!user) return sendJson(res, 401, { error: 'Not signed in' })
     db.markRoomAccessSeen(user.id, decodeURIComponent(accessSeenMatch[1]))
     sendJson(res, 200, { ok: true })
@@ -518,7 +696,7 @@ if (pathname === '/api/health' && req.method === 'GET') {
 
   // GET /api/rooms/recent
   if (pathname === '/api/rooms/recent' && req.method === 'GET') {
-    const user = getAuthUser(req)
+    const user = await getAuthUser(req)
     if (!user) return sendJson(res, 401, { error: 'Not signed in' })
     sendJson(res, 200, { rooms: db.listRecentRooms(user.id) })
     return
@@ -529,7 +707,7 @@ if (pathname === '/api/health' && req.method === 'GET') {
 
   // POST /api/rooms  { id, description?, isPublic? }
   if (pathname === '/api/rooms' && req.method === 'POST') {
-    const user = getAuthUser(req)
+    const user = await getAuthUser(req)
     try {
       const body = await readBody(req)
       const id = (body.id || '').trim()
@@ -565,7 +743,7 @@ if (pathname === '/api/health' && req.method === 'GET') {
 
   // PUT /api/rooms/:id  { description?, isPublic? }
   if (roomMatch && req.method === 'PUT') {
-    const user = getAuthUser(req)
+    const user = await getAuthUser(req)
     try {
       const body = await readBody(req)
       const roomId = roomMatch[1]
@@ -607,7 +785,7 @@ if (pathname === '/api/health' && req.method === 'GET') {
   // POST /api/rooms/:id/touch
   const touchMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/touch$/)
   if (touchMatch && req.method === 'POST') {
-    const user = getAuthUser(req)
+    const user = await getAuthUser(req)
     if (user) db.touchRecentRoom(user.id, touchMatch[1])
     sendJson(res, 200, { ok: true })
     return
@@ -631,7 +809,7 @@ if (pathname === '/api/health' && req.method === 'GET') {
       if (body.rotateView) next.view = nanoid(12)
       roomPasswords.set(roomId, next)
       savePasswords(roomPasswords)
-      const user = getAuthUser(req)
+      const user = await getAuthUser(req)
       db.logActivity({
         roomId,
         userId: user?.id || null,
@@ -655,7 +833,7 @@ if (pathname === '/api/health' && req.method === 'GET') {
 
   // POST /api/rooms/:id/activity  { action, detail?, displayName? }
   if (activityMatch && req.method === 'POST') {
-    const user = getAuthUser(req)
+    const user = await getAuthUser(req)
     try {
       const body = await readBody(req)
       const action = (body.action || '').trim()
@@ -683,7 +861,7 @@ if (pathname === '/api/health' && req.method === 'GET') {
 
   // POST /api/rooms/:id/snapshots  { name, payload }
   if (snapsMatch && req.method === 'POST') {
-    const user = getAuthUser(req)
+    const user = await getAuthUser(req)
     try {
       const body = await readBody(req)
       const name = (body.name || '').trim()

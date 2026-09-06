@@ -115,6 +115,18 @@ try {
   /* ignore */
 }
 
+
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN accounts_id TEXT`)
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_accounts_id ON users(accounts_id)`)
+} catch {
+  /* ignore */
+}
+
 function now() {
   return Date.now()
 }
@@ -133,10 +145,50 @@ function getUserById(id) {
   return (
     db
       .prepare(
-        `SELECT id, email, display_name AS displayName, color, created_at AS createdAt FROM users WHERE id = ?`
+        `SELECT id, email, display_name AS displayName, color, accounts_id AS accountsId, created_at AS createdAt FROM users WHERE id = ?`
       )
       .get(id) || null
   )
+}
+
+function getUserByAccountsId(accountsId) {
+  if (!accountsId) return null
+  return (
+    db
+      .prepare(
+        `SELECT id, email, display_name AS displayName, color, accounts_id AS accountsId, created_at AS createdAt FROM users WHERE accounts_id = ?`
+      )
+      .get(accountsId) || null
+  )
+}
+
+/** Create or update local user from Collab Accounts profile. Keeps local id for room FKs. */
+function ensureLocalUserFromAccounts(profile) {
+  const accountsId = profile.id
+  const email = String(profile.email || '').trim().toLowerCase()
+  const displayName = String(profile.display_name || email.split('@')[0]).trim().slice(0, 40)
+  const color = profile.avatar_color || null
+
+  let row = getUserByAccountsId(accountsId) || getUserByEmail(email)
+  if (row && row.passwordHash !== undefined) {
+    // getUserByEmail returns passwordHash — strip for consistency
+    row = getUserById(row.id)
+  }
+
+  if (row) {
+    db.prepare(
+      `UPDATE users SET accounts_id = ?, display_name = ?, email = ?, color = COALESCE(?, color) WHERE id = ?`
+    ).run(accountsId, displayName, email, color, row.id)
+    return getUserById(row.id)
+  }
+
+  const id = require('crypto').randomBytes(15).toString('base64url').slice(0, 20)
+  const t = now()
+  db.prepare(
+    `INSERT INTO users (id, email, password_hash, display_name, color, accounts_id, created_at)
+     VALUES (?, ?, '', ?, ?, ?, ?)`
+  ).run(id, email, displayName, color, accountsId, t)
+  return getUserById(id)
 }
 
 function getUserByEmail(email) {
@@ -554,5 +606,7 @@ module.exports = {
   listRoomAccessForUser,
   markRoomAccessSeen,
   listEditorialRooms,
-  SESSION_TTL_MS
+  SESSION_TTL_MS,
+  getUserByAccountsId,
+  ensureLocalUserFromAccounts
 }
