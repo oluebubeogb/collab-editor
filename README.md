@@ -17,6 +17,14 @@ Real-time collaborative editor (Yjs + Monaco + y-websocket).
 - IndexedDB local Yjs persistence + silent reconnect UI
 - Named snapshots and activity log
 
+### Phase 1 Git + Terminal (local)
+- Bottom panel tabs: **Console | Terminal | Changes**
+- Interactive terminal against the room file tree (working directory)
+- Local Git (per-room, localStorage): `init`, `status`, `add`, `commit`, `log`, `diff`, `branch`, `switch`, `restore`
+- Git dropdown + command autocomplete (paths & branches)
+- Changes tab shows staged / unstaged / untracked
+- Remote push/pull/PR deferred to Phase 2
+
 ### Phase 2
 - **Persistent editor tabs** restored after reboot (localStorage per room)
 - **Cross-file search** (Ctrl+Shift+F)

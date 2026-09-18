@@ -13,6 +13,14 @@ import IconRail, { type RailPanel } from '../components/IconRail'
 import TopBar from '../components/TopBar'
 import SidebarExtras from '../components/SidebarExtras'
 import BottomConsole, { type ConsoleLine } from '../components/BottomConsole'
+import {
+  computeStatus,
+  execGitCommand,
+  getBranchNames,
+  loadLocalGit,
+  workingTreeFromTexts,
+  type GitStatusEntry
+} from '../lib/localGit'
 import { useYjs } from '../hooks/useYjs'
 import { useVoice } from '../hooks/useVoice'
 import { useAuth } from '../hooks/useAuth'
@@ -279,6 +287,10 @@ export default function Room() {
   const [activity, setActivity] = useState<ActivityEntry[]>([])
   const [shareOpen, setShareOpen] = useState(false)
   const [filesTouched, setFilesTouched] = useState(0)
+  const [gitStatus, setGitStatus] = useState<GitStatusEntry[]>([])
+  const [gitBranch, setGitBranch] = useState('main')
+  const [gitHead, setGitHead] = useState<string | null>(null)
+  const [gitBranches, setGitBranches] = useState<string[]>(['main'])
   const [comments, setComments] = useState<LineComment[]>([])
   const [pendingReveal, setPendingReveal] = useState<{ path: string; line: number } | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
@@ -601,6 +613,72 @@ export default function Room() {
     setActiveTab((prev) => mapPath(prev))
     setPreviewEntryPath((prev) => mapPath(prev))
   }, [])
+
+
+  // Phase 1 — refresh local Git status from room working tree
+  const refreshGitStatus = useCallback(() => {
+    const state = loadLocalGit(roomId)
+    const working = workingTreeFromTexts(texts)
+    const status = state.initialized ? computeStatus(state, working) : []
+    setGitStatus(status)
+    setGitBranch(state.branch || 'main')
+    setGitHead(state.head)
+    setGitBranches(getBranchNames(state))
+    setFilesTouched(status.length)
+  }, [roomId, texts])
+
+  useEffect(() => {
+    refreshGitStatus()
+  }, [refreshGitStatus])
+
+  const restoreFileContent = useCallback(
+    (path: string, content: string | null) => {
+      if (readonly || !doc) return
+      if (content === null) {
+        deletePath(path)
+        return
+      }
+      const yText = getOrCreateText(path)
+      if (!yText) {
+        createFile(path, content)
+        return
+      }
+      doc.transact(() => {
+        const len = yText.length
+        if (len > 0) yText.delete(0, len)
+        if (content) yText.insert(0, content)
+      })
+    },
+    [readonly, doc, getOrCreateText, createFile, deletePath]
+  )
+
+  const onRunTerminalCommand = useCallback(
+    (command: string) => {
+      const working = workingTreeFromTexts(texts)
+      const result = execGitCommand(command, {
+        roomId,
+        author: userAwareness.name,
+        working,
+        onRestoreFile: restoreFileContent
+      })
+      // Refresh status after any git mutation
+      const state = result.state
+      const status = state.initialized ? computeStatus(state, workingTreeFromTexts(texts)) : []
+      setGitStatus(status)
+      setGitBranch(state.branch || 'main')
+      setGitHead(state.head)
+      setGitBranches(getBranchNames(state))
+      setFilesTouched(status.length)
+      if (result.ok && command.trim().match(/^(git\s+)?(init|commit|add|restore|reset|switch|branch)/)) {
+        setEditorConsole((prev) => [
+          ...prev,
+          { level: 'success' as const, text: result.lines[0] || 'Git: done' }
+        ])
+      }
+      return { ok: result.ok, lines: result.lines }
+    },
+    [texts, roomId, userAwareness.name, restoreFileContent]
+  )
 
   const openFile = useCallback(
     (path: string) => {
@@ -1543,9 +1621,15 @@ if (!ready) {
                 <BottomConsole
                   lines={editorConsole}
                   changeCount={filesTouched}
+                  gitStatus={gitStatus}
+                  gitBranch={gitBranch}
+                  gitHead={gitHead}
                   onClear={() => setEditorConsole([])}
                   collapsed={consoleCollapsed}
                   onToggleCollapse={() => setConsoleCollapsed((v) => !v)}
+                  onRunCommand={onRunTerminalCommand}
+                  filePaths={Object.keys(texts).sort()}
+                  branchNames={gitBranches}
                 />
               </div>
             </Panel>
