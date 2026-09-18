@@ -27,6 +27,9 @@ export interface GhFileEntry {
   path: string
   content: string
   sha?: string
+  /** true when content is a data-URL image (or other binary) */
+  binary?: boolean
+  mime?: string
 }
 
 export interface GhPullRequest {
@@ -260,16 +263,36 @@ export async function fetchTreeFiles(
           blobErrors++
           return null
         }
+        const rawB64 = (blob.data.content || '').replace(/\n/g, '')
+        const pathLower = (b.path || '').toLowerCase()
+        const isImg = /\.(png|jpe?g|gif|webp|bmp|avif|ico)$/i.test(pathLower)
+        if (isImg && blob.data.encoding === 'base64' && rawB64) {
+          const mime =
+            pathLower.endsWith('.png') ? 'image/png' :
+            pathLower.endsWith('.jpg') || pathLower.endsWith('.jpeg') ? 'image/jpeg' :
+            pathLower.endsWith('.gif') ? 'image/gif' :
+            pathLower.endsWith('.webp') ? 'image/webp' :
+            pathLower.endsWith('.bmp') ? 'image/bmp' :
+            pathLower.endsWith('.avif') ? 'image/avif' :
+            pathLower.endsWith('.ico') ? 'image/x-icon' : 'application/octet-stream'
+          return {
+            path: b.path,
+            content: `data:${mime};base64,${rawB64}`,
+            sha: blob.data.sha,
+            binary: true,
+            mime
+          } as GhFileEntry
+        }
         let content = blob.data.content || ''
         if (blob.data.encoding === 'base64') {
           try {
-            content = decodeBase64Utf8(content.replace(/\n/g, ''))
+            content = decodeBase64Utf8(rawB64)
           } catch {
             return null
           }
         }
         if (content.includes('\0')) return null
-        return { path: b.path, content, sha: blob.data.sha } as GhFileEntry
+        return { path: b.path, content, sha: blob.data.sha, binary: false } as GhFileEntry
       })
     )
     for (const f of results) if (f) files.push(f)

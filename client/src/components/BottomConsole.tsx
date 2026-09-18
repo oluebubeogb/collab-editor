@@ -457,8 +457,13 @@ export default function BottomConsole({
               </div>
               {suggestions.length > 0 && (
                 <div
-                  className="absolute left-2 right-2 bottom-8 z-40 max-h-36 overflow-y-auto rounded border shadow-lg py-1"
-                  style={{ background: 'var(--surface)', borderColor: 'var(--line)' }}
+                  className="absolute left-2 right-2 bottom-8 z-[100] max-h-36 overflow-y-auto rounded-md border shadow-xl py-1"
+                  style={{
+                    background: 'var(--surface-1)',
+                    borderColor: 'var(--line)',
+                    boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+                    opacity: 1
+                  }}
                 >
                   {suggestions.map((s, i) => (
                     <button

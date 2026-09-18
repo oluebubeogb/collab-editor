@@ -10,6 +10,13 @@ export interface VoicePeer {
   color: string
   muted: boolean
   connected: boolean
+  screenSharing?: boolean
+}
+
+export interface RemoteScreen {
+  peerId: number
+  name: string
+  stream: MediaStream
 }
 
 interface SignalMessage {
@@ -59,7 +66,9 @@ export function useVoice(opts: {
   const [error, setError] = useState<string | null>(null)
   const [joining, setJoining] = useState(false)
   const [screenSharing, setScreenSharing] = useState(false)
+  const [remoteScreens, setRemoteScreens] = useState<RemoteScreen[]>([])
   const screenTrackRef = useRef<MediaStreamTrack | null>(null)
+  const localScreenStreamRef = useRef<MediaStream | null>(null)
 
   const channelRef = useRef<VoiceChannel | null>(null)
   const mutedRef = useRef(false)
@@ -67,7 +76,9 @@ export function useVoice(opts: {
   const pcsRef = useRef<Map<number, RTCPeerConnection>>(new Map())
   const makingOfferRef = useRef<Set<number>>(new Set())
   const remoteAudioRef = useRef<Map<number, HTMLAudioElement>>(new Map())
+  const remoteVideoRef = useRef<Map<number, MediaStream>>(new Map())
   const processedSignalsRef = useRef<Set<string>>(new Set())
+  const peerNamesRef = useRef<Map<number, string>>(new Map())
 
   channelRef.current = channel
   mutedRef.current = muted
@@ -111,7 +122,10 @@ export function useVoice(opts: {
       audio.remove()
       remoteAudioRef.current.delete(peerId)
     }
+    remoteVideoRef.current.delete(peerId)
+    setRemoteScreens((prev) => prev.filter((s) => s.peerId !== peerId))
     makingOfferRef.current.delete(peerId)
+    peerNamesRef.current.delete(peerId)
     setPeers((prev) => prev.filter((p) => p.clientId !== peerId))
   }, [])
 
@@ -165,8 +179,41 @@ export function useVoice(opts: {
       }
 
       pc.ontrack = (ev) => {
-        const stream = ev.streams[0]
-        if (stream) ensureRemoteAudio(peerId, stream)
+        const stream = ev.streams[0] || new MediaStream([ev.track])
+        if (ev.track.kind === 'audio') {
+          ensureRemoteAudio(peerId, stream)
+        } else if (ev.track.kind === 'video') {
+          remoteVideoRef.current.set(peerId, stream)
+          const name = peerNamesRef.current.get(peerId) || `Peer ${peerId}`
+          setRemoteScreens((prev) => {
+            const rest = prev.filter((s) => s.peerId !== peerId)
+            return [...rest, { peerId, name, stream }]
+          })
+          ev.track.onended = () => {
+            remoteVideoRef.current.delete(peerId)
+            setRemoteScreens((prev) => prev.filter((s) => s.peerId !== peerId))
+          }
+        }
+      }
+
+      pc.onnegotiationneeded = async () => {
+        if (!provider || makingOfferRef.current.has(peerId)) return
+        try {
+          makingOfferRef.current.add(peerId)
+          const offer = await pc.createOffer()
+          await pc.setLocalDescription(offer)
+          postSignal({
+            from: provider.awareness.clientID,
+            to: peerId,
+            type: 'offer',
+            sdp: offer,
+            channel: ch
+          })
+        } catch {
+          /* ignore */
+        } finally {
+          makingOfferRef.current.delete(peerId)
+        }
       }
 
       pc.onconnectionstatechange = () => {
@@ -196,6 +243,7 @@ export function useVoice(opts: {
       if (!provider || peerId === provider.awareness.clientID) return
       if (pcsRef.current.has(peerId)) return
 
+      peerNamesRef.current.set(peerId, name)
       setPeers((prev) => {
         if (prev.some((p) => p.clientId === peerId)) return prev
         return [...prev, { clientId: peerId, name, color, muted: peerMuted, connected: false }]
@@ -450,7 +498,7 @@ export function useVoice(opts: {
       track.stop()
       screenTrackRef.current = null
     }
-    // Remove from peer connections
+    localScreenStreamRef.current = null
     pcsRef.current.forEach((pc) => {
       pc.getSenders().forEach((s) => {
         if (s.track && s.track.kind === 'video') {
@@ -471,11 +519,16 @@ export function useVoice(opts: {
   const startScreenShare = useCallback(async () => {
     if (!channelRef.current) return
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 15, width: { max: 1920 }, height: { max: 1080 } } as MediaTrackConstraints,
+        audio: false
+      })
       const track = stream.getVideoTracks()[0]
       if (!track) return
       screenTrackRef.current = track
+      localScreenStreamRef.current = stream
       track.onended = () => stopScreenShare()
+      // addTrack triggers onnegotiationneeded on each PC
       pcsRef.current.forEach((pc) => {
         try {
           pc.addTrack(track, stream)
@@ -508,6 +561,8 @@ export function useVoice(opts: {
     error,
     joining,
     screenSharing,
+    remoteScreens,
+    localScreenStream: localScreenStreamRef.current,
     join,
     leave,
     toggleMute,

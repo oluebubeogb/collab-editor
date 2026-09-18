@@ -23,6 +23,7 @@ import {
   type GitStatusEntry
 } from '../lib/localGit'
 import GitHubConnectModal from '../components/GitHubConnectModal'
+import ScreenShareDock from '../components/ScreenShareDock'
 import {
   createPullRequest,
   fetchTreeFiles,
@@ -34,6 +35,7 @@ import {
   type GitHubRemote,
   type GitHubUser
 } from '../lib/github'
+import { isImagePath, pathWithWebpExt, processImage } from '../lib/imageProcess'
 import { useYjs } from '../hooks/useYjs'
 import { useVoice } from '../hooks/useVoice'
 import { useAuth } from '../hooks/useAuth'
@@ -669,7 +671,7 @@ export default function Room() {
   )
 
   const applyRemoteFilesToRoom = useCallback(
-    (files: { path: string; content: string }[], mode: 'merge' | 'replace') => {
+    async (files: { path: string; content: string; binary?: boolean; mime?: string }[], mode: 'merge' | 'replace') => {
       if (readonly || !doc) {
         return { written: 0, conflicts: [] as string[], error: readonly ? 'Room is read-only' : 'Doc not ready' }
       }
@@ -678,17 +680,55 @@ export default function Room() {
       const working = workingTreeFromTexts(texts)
       const meta = filesMeta()
       const yTexts = fileTexts()
+      const binaries = fileBinaries()
+
+      // Pre-process images outside the Yjs transaction (async canvas)
+      const prepared: { path: string; content: string; binary: boolean; mime?: string }[] = []
+      for (const f of files) {
+        if (!f.path) continue
+        if (f.binary || isImagePath(f.path)) {
+          try {
+            const processed = await processImage(f.content, {
+              maxEdge: 720,
+              format: 'keep',
+              pathHint: f.path,
+              quality: 0.85
+            })
+            prepared.push({
+              path: f.path, // keep original name/format (baby.png stays baby.png)
+              content: processed.dataUrl,
+              binary: true,
+              mime: processed.mime
+            })
+          } catch {
+            // store original data URL if resize fails
+            prepared.push({
+              path: f.path,
+              content: f.content,
+              binary: true,
+              mime: f.mime
+            })
+          }
+        } else {
+          prepared.push({ path: f.path, content: f.content ?? '', binary: false })
+        }
+      }
 
       doc.transact(() => {
-        for (const f of files) {
-          if (!f.path) continue
-          // Ensure parent folder entries exist (FileExplorer + consistency)
+        for (const f of prepared) {
           const parts = f.path.split('/')
           for (let i = 1; i < parts.length; i++) {
             const folder = parts.slice(0, i).join('/')
             if (!meta.has(folder)) {
               meta.set(folder, { type: 'folder', binary: false })
             }
+          }
+
+          if (f.binary) {
+            meta.set(f.path, { type: 'file', binary: true, mime: f.mime })
+            binaries.set(f.path, f.content)
+            written++
+            continue
           }
 
           let content = f.content ?? ''
@@ -718,7 +758,7 @@ export default function Room() {
       })
       return { written, conflicts }
     },
-    [readonly, doc, texts, filesMeta, fileTexts]
+    [readonly, doc, texts, filesMeta, fileTexts, fileBinaries]
   )
 
   const onRunTerminalCommand = useCallback(
@@ -788,7 +828,7 @@ export default function Room() {
           const branch = remote.defaultBranch
           const r = await fetchTreeFiles(token, remote.owner, remote.repo, branch)
           if (!r.ok) return { ok: false, lines: [`pull failed: ${r.error}`] }
-          const result = applyRemoteFilesToRoom(r.files, 'merge')
+          const result = await applyRemoteFilesToRoom(r.files, 'merge')
           if (result.error) {
             return { ok: false, lines: [`pull failed: ${result.error}`, `Fetched ${r.files.length} file(s) but could not write to room.`] }
           }
@@ -831,8 +871,16 @@ export default function Room() {
 
         if (/^(git\s+)?push\b/.test(lower)) {
           let message = `Update from collab room ${roomId}`
-          const m = trimmed.match(/-m\s+"([^"]+)"|-m\s+'([^']+)'|-m\s+(\S+)/)
-          if (m) message = m[1] || m[2] || m[3]
+          const mDouble = trimmed.match(/-m\s+"([^"]*)"/)
+          const mSingle = trimmed.match(/-m\s+'([^']*)'/)
+          const mEq = trimmed.match(/--message\s*=\s*"([^"]*)"/) || trimmed.match(/--message\s*=\s*'([^']*)'/)
+          const mBare = trimmed.match(/-m\s+(.+)$/)
+          if (mDouble && mDouble[1].trim()) message = mDouble[1].trim()
+          else if (mSingle && mSingle[1].trim()) message = mSingle[1].trim()
+          else if (mEq && mEq[1].trim()) message = mEq[1].trim()
+          else if (mBare && mBare[1].trim() && !mBare[1].trim().startsWith('-')) {
+            message = mBare[1].trim().replace(/^["']|["']$/g, '')
+          }
           const r = await pushTree(
             writeToken,
             remote.owner,
@@ -1067,21 +1115,40 @@ export default function Room() {
     (parentFolder: string | null, fileList: FileList) => {
       if (readonly) return
       Array.from(fileList).forEach((file) => {
-        const relative =
-          (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
-        const path = parentFolder ? `${parentFolder}/${relative}` : relative
-        // Ensure parent folders exist for nested uploads (folder select)
-        const parts = path.split('/')
-        if (parts.length > 1) {
-          let current = ''
-          for (let i = 0; i < parts.length - 1; i++) {
-            current = current ? `${current}/${parts[i]}` : parts[i]
-            if (!filesMeta().has(current)) {
-              createFolder(current)
+        void (async () => {
+          const relative =
+            (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+          let path = parentFolder ? `${parentFolder}/${relative}` : relative
+          // Images from normal upload → 720px WebP, same basename (child.png → child.webp)
+          let uploadBlob: File | Blob = file
+          if (file.type.startsWith('image/') || isImagePath(path)) {
+            try {
+              const processed = await processImage(file, {
+                maxEdge: 720,
+                format: 'webp',
+                quality: 0.82
+              })
+              path = pathWithWebpExt(path)
+              const bin = await (await fetch(processed.dataUrl)).blob()
+              uploadBlob = new File([bin], path.split('/').pop() || 'image.webp', {
+                type: 'image/webp'
+              })
+            } catch (e) {
+              console.warn('image convert failed, uploading original', e)
             }
           }
-        }
-        uploadFile(path, file)
+          const parts = path.split('/')
+          if (parts.length > 1) {
+            let current = ''
+            for (let i = 0; i < parts.length - 1; i++) {
+              current = current ? `${current}/${parts[i]}` : parts[i]
+              if (!filesMeta().has(current)) {
+                createFolder(current)
+              }
+            }
+          }
+          uploadFile(path, uploadBlob as File)
+        })()
       })
     },
     [uploadFile, createFolder, filesMeta, readonly]
@@ -1917,6 +1984,12 @@ if (!ready) {
           </PanelGroup>
         </div>
       </div>
+
+      <ScreenShareDock
+        remoteScreens={voice.remoteScreens || []}
+        localStream={voice.localScreenStream}
+        localSharing={!!voice.screenSharing}
+      />
 
       <GitHubConnectModal
         roomId={roomId}
