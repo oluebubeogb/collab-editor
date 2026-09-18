@@ -176,7 +176,7 @@ export async function getRepo(
 }
 
 export async function listBranches(
-  token: string,
+  token: string | null | undefined,
   owner: string,
   repo: string
 ): Promise<{ ok: true; branches: string[] } | { ok: false; error: string }> {
@@ -283,6 +283,21 @@ export async function fetchTreeFiles(
   }
 
   return { ok: true, files, commitSha }
+}
+
+
+function decodeBase64Utf8(b64: string): string {
+  const bin = atob(b64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return new TextDecoder('utf-8').decode(bytes)
+}
+
+function encodeBase64Utf8(text: string): string {
+  const bytes = new TextEncoder().encode(text)
+  let bin = ''
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
+  return btoa(bin)
 }
 
 export async function pushTree(

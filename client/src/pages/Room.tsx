@@ -775,6 +775,8 @@ export default function Room() {
             ]
           }
         }
+        // After the check above, write paths can treat token as string
+        const writeToken = token as string
 
         if (lower.startsWith('git branch -r') || lower === 'branch -r') {
           const r = await listBranches(token, remote.owner, remote.repo)
@@ -832,7 +834,7 @@ export default function Room() {
           const m = trimmed.match(/-m\s+"([^"]+)"|-m\s+'([^']+)'|-m\s+(\S+)/)
           if (m) message = m[1] || m[2] || m[3]
           const r = await pushTree(
-            token,
+            writeToken,
             remote.owner,
             remote.repo,
             remote.defaultBranch,
@@ -874,7 +876,7 @@ export default function Room() {
           }
           // Ensure branch exists on remote by pushing head tip of working tree
           const push = await pushTree(
-            token,
+            writeToken,
             remote.owner,
             remote.repo,
             head,
@@ -887,7 +889,7 @@ export default function Room() {
           }
           const title = `Collab: ${head}`
           const pr = await createPullRequest(
-            token,
+            writeToken,
             remote.owner,
             remote.repo,
             head,
