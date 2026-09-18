@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import * as Y from 'yjs'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import Editor, { EditorHandle } from '../components/Editor'
@@ -669,46 +670,55 @@ export default function Room() {
 
   const applyRemoteFilesToRoom = useCallback(
     (files: { path: string; content: string }[], mode: 'merge' | 'replace') => {
-      if (readonly || !doc) return { written: 0, conflicts: [] as string[] }
+      if (readonly || !doc) {
+        return { written: 0, conflicts: [] as string[], error: readonly ? 'Room is read-only' : 'Doc not ready' }
+      }
       const conflicts: string[] = []
       let written = 0
       const working = workingTreeFromTexts(texts)
+      const meta = filesMeta()
+      const yTexts = fileTexts()
+
       doc.transact(() => {
-        if (mode === 'replace') {
-          // only overwrite text files present in remote pull; keep local-only files
-        }
         for (const f of files) {
-          const local = working[f.path]
-          if (local !== undefined && local !== f.content && mode === 'merge') {
-            // conflict: keep both with markers
-            const merged =
-              `<<<<<<< LOCAL (room)\n${local}\n=======\n${f.content}\n>>>>>>> GITHUB\n`
-            const yText = getOrCreateText(f.path)
-            if (yText) {
-              const len = yText.length
-              if (len > 0) yText.delete(0, len)
-              yText.insert(0, merged)
-            } else {
-              createFile(f.path, merged)
+          if (!f.path) continue
+          // Ensure parent folder entries exist (FileExplorer + consistency)
+          const parts = f.path.split('/')
+          for (let i = 1; i < parts.length; i++) {
+            const folder = parts.slice(0, i).join('/')
+            if (!meta.has(folder)) {
+              meta.set(folder, { type: 'folder', binary: false })
             }
+          }
+
+          let content = f.content ?? ''
+          const local = working[f.path]
+          if (
+            mode === 'merge' &&
+            local !== undefined &&
+            local !== content &&
+            local.trim().length > 0
+          ) {
+            content =
+              `<<<<<<< LOCAL (room)\n${local}\n=======\n${content}\n>>>>>>> GITHUB\n`
             conflicts.push(f.path)
-            written++
-            continue
           }
-          const yText = getOrCreateText(f.path)
-          if (yText) {
-            const len = yText.length
-            if (len > 0) yText.delete(0, len)
-            if (f.content) yText.insert(0, f.content)
-          } else {
-            createFile(f.path, f.content)
+
+          meta.set(f.path, { type: 'file', binary: false })
+          let yText = yTexts.get(f.path)
+          if (!yText) {
+            yText = new Y.Text()
+            yTexts.set(f.path, yText)
           }
+          const len = yText.length
+          if (len > 0) yText.delete(0, len)
+          if (content) yText.insert(0, content)
           written++
         }
       })
       return { written, conflicts }
     },
-    [readonly, doc, texts, getOrCreateText, createFile]
+    [readonly, doc, texts, filesMeta, fileTexts]
   )
 
   const onRunTerminalCommand = useCallback(
@@ -746,13 +756,22 @@ export default function Room() {
           }
         }
 
-        if (!token || !remote) {
+        if (!remote) {
           return {
             ok: false,
             lines: [
-              'GitHub not connected or no remote linked.',
-              'Use Git menu → Connect GitHub… then link owner/repo.',
-              'Token needs repo (or Contents + Pull requests) scope.'
+              'No remote linked to this room.',
+              'Use Git menu → Connect GitHub… then link owner/repo.'
+            ]
+          }
+        }
+        const needsWrite = /^(git\s+)?(push|pr)\b/.test(lower) || lower.startsWith('git push') || lower.startsWith('git pr')
+        if (needsWrite && !token) {
+          return {
+            ok: false,
+            lines: [
+              'GitHub token required to push / create PRs.',
+              'Use Git menu → Connect GitHub…'
             ]
           }
         }
@@ -767,24 +786,38 @@ export default function Room() {
           const branch = remote.defaultBranch
           const r = await fetchTreeFiles(token, remote.owner, remote.repo, branch)
           if (!r.ok) return { ok: false, lines: [`pull failed: ${r.error}`] }
-          const { written, conflicts } = applyRemoteFilesToRoom(r.files, 'merge')
-          // Align local git HEAD snapshot after pull
-          const initResult = execGitCommand('git init', {
+          const result = applyRemoteFilesToRoom(r.files, 'merge')
+          if (result.error) {
+            return { ok: false, lines: [`pull failed: ${result.error}`, `Fetched ${r.files.length} file(s) but could not write to room.`] }
+          }
+          const { written, conflicts } = result
+          // Seed local git history from pulled tree
+          execGitCommand('git init', {
             roomId,
             author: userAwareness.name,
-            working: workingTreeFromTexts(
-              Object.fromEntries(r.files.map((f) => [f.path, f.content]))
-            )
+            working: Object.fromEntries(r.files.map((f) => [f.path, f.content]))
           })
-          // Force a commit representing remote tip
-          const st = initResult.state
-          // refresh from room after apply
+          execGitCommand('git add .', {
+            roomId,
+            author: userAwareness.name,
+            working: Object.fromEntries(r.files.map((f) => [f.path, f.content]))
+          })
+          execGitCommand(`git commit -m "Pull ${remote.owner}/${remote.repo}@${branch}"`, {
+            roomId,
+            author: userAwareness.name,
+            working: Object.fromEntries(r.files.map((f) => [f.path, f.content]))
+          })
           refreshGitStatus()
           const lines = [
             `Pulled ${remote.owner}/${remote.repo}@${branch}`,
             `commit ${r.commitSha.slice(0, 7)}`,
-            `Updated ${written} file(s) in the room.`
+            `Fetched ${r.files.length} text file(s), wrote ${written} into the room.`
           ]
+          if (written === 0) {
+            lines.push('No files written — check you joined as editor (not read-only).')
+          } else {
+            lines.push('Files should appear in the sidebar. Open one to edit.')
+          }
           if (conflicts.length) {
             lines.push(
               `Conflicts in ${conflicts.length} file(s) — search for <<<<<<< LOCAL:`,

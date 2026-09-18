@@ -219,7 +219,7 @@ export default function BottomConsole({
       style={{
         borderColor: 'var(--line)',
         background: 'var(--surface-console)',
-        height: collapsed ? 32 : 180,
+        height: collapsed ? 32 : 280,
         zIndex: gitMenuOpen ? 50 : 1
       }}
     >

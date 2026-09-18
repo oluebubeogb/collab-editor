@@ -36,13 +36,14 @@ export interface GhPullRequest {
   state: string
 }
 
-function headers(token: string): HeadersInit {
-  return {
+function headers(token?: string | null): HeadersInit {
+  const h: Record<string, string> = {
     Accept: 'application/vnd.github+json',
-    Authorization: `Bearer ${token}`,
     'X-GitHub-Api-Version': '2022-11-28',
     'Content-Type': 'application/json'
   }
+  if (token) h.Authorization = `Bearer ${token}`
+  return h
 }
 
 export function loadGitHubToken(): string | null {
@@ -114,7 +115,7 @@ export function parseRepoRef(input: string): { owner: string; repo: string } | n
 }
 
 async function gh<T>(
-  token: string,
+  token: string | null | undefined,
   path: string,
   init?: RequestInit
 ): Promise<{ ok: true; data: T; status: number } | { ok: false; error: string; status: number }> {
@@ -203,33 +204,50 @@ interface GhTree {
 
 /** Recursively list text files from a branch (via git tree API). */
 export async function fetchTreeFiles(
-  token: string,
+  token: string | null | undefined,
   owner: string,
   repo: string,
   branch: string
 ): Promise<{ ok: true; files: GhFileEntry[]; commitSha: string } | { ok: false; error: string }> {
+  // Resolve branch → commit SHA
+  let commitSha = ''
   const ref = await gh<GhRef>(token, `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`)
-  if (!ref.ok) {
-    // try without heads/ for some edge cases
-    return { ok: false, error: `Branch '${branch}': ${ref.error}` }
+  if (ref.ok) {
+    commitSha = ref.data.object.sha
+  } else {
+    const br = await gh<{ commit: { sha: string } }>(
+      token,
+      `/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`
+    )
+    if (!br.ok) {
+      return {
+        ok: false,
+        error: `Branch '${branch}' not found (${ref.error}). Set the correct default branch in Connect GitHub.`
+      }
+    }
+    commitSha = br.data.commit.sha
   }
-  const commitSha = ref.data.object.sha
+
   const commit = await gh<GhCommit>(token, `/repos/${owner}/${repo}/git/commits/${commitSha}`)
-  if (!commit.ok) return { ok: false, error: commit.error }
+  if (!commit.ok) return { ok: false, error: `commit: ${commit.error}` }
 
   const tree = await gh<GhTree>(
     token,
     `/repos/${owner}/${repo}/git/trees/${commit.data.tree.sha}?recursive=1`
   )
-  if (!tree.ok) return { ok: false, error: tree.error }
+  if (!tree.ok) return { ok: false, error: `tree: ${tree.error}` }
 
   const blobs = (tree.data.tree || []).filter(
     (t) => t.type === 'blob' && t.path && (!t.size || t.size < 1_500_000)
   )
 
+  if (blobs.length === 0) {
+    return { ok: false, error: 'Repository tree is empty (no files found).' }
+  }
+
   const files: GhFileEntry[] = []
-  // Batch content fetches (limit concurrency)
-  const concurrency = 8
+  const concurrency = 6
+  let blobErrors = 0
   for (let i = 0; i < blobs.length; i += concurrency) {
     const chunk = blobs.slice(i, i + concurrency)
     const results = await Promise.all(
@@ -238,16 +256,18 @@ export async function fetchTreeFiles(
           token,
           `/repos/${owner}/${repo}/git/blobs/${b.sha}`
         )
-        if (!blob.ok) return null
+        if (!blob.ok) {
+          blobErrors++
+          return null
+        }
         let content = blob.data.content || ''
         if (blob.data.encoding === 'base64') {
           try {
             content = decodeBase64Utf8(content.replace(/\n/g, ''))
           } catch {
-            return null // skip binary-ish
+            return null
           }
         }
-        // skip likely binary
         if (content.includes('\0')) return null
         return { path: b.path, content, sha: blob.data.sha } as GhFileEntry
       })
@@ -255,27 +275,16 @@ export async function fetchTreeFiles(
     for (const f of results) if (f) files.push(f)
   }
 
+  if (files.length === 0) {
+    return {
+      ok: false,
+      error: `No text files could be loaded (${blobs.length} blobs, ${blobErrors} errors). Token may lack Contents access.`
+    }
+  }
+
   return { ok: true, files, commitSha }
 }
 
-function decodeBase64Utf8(b64: string): string {
-  const bin = atob(b64)
-  const bytes = new Uint8Array(bin.length)
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-  return new TextDecoder('utf-8').decode(bytes)
-}
-
-function encodeBase64Utf8(text: string): string {
-  const bytes = new TextEncoder().encode(text)
-  let bin = ''
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
-  return btoa(bin)
-}
-
-/**
- * Push full working tree to a branch (creates commit + updates ref).
- * Uses Git Data API: blobs → tree → commit → ref.
- */
 export async function pushTree(
   token: string,
   owner: string,
