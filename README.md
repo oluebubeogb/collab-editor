@@ -37,6 +37,13 @@ Real-time collaborative editor (Yjs + Monaco + y-websocket).
 - **Rotate** password or view key without changing room id
 - Voice **rejoin** prompt after disconnect
 
+### Phase 2 GitHub remote
+- Connect GitHub via Personal Access Token (browser-local)
+- Link `owner/repo` per room
+- `git pull` / `git push` / `git pr create` / `git remote -v` / `git branch -r`
+- Pull merges with `<<<<<<< LOCAL` conflict markers when both sides changed
+- See `PHASE2-GIT.md`
+
 ## Install
 
 ```bash

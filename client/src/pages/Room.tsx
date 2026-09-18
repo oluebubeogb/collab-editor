@@ -21,6 +21,18 @@ import {
   workingTreeFromTexts,
   type GitStatusEntry
 } from '../lib/localGit'
+import GitHubConnectModal from '../components/GitHubConnectModal'
+import {
+  createPullRequest,
+  fetchTreeFiles,
+  listBranches,
+  loadGitHubToken,
+  loadGitHubUser,
+  loadRoomRemote,
+  pushTree,
+  type GitHubRemote,
+  type GitHubUser
+} from '../lib/github'
 import { useYjs } from '../hooks/useYjs'
 import { useVoice } from '../hooks/useVoice'
 import { useAuth } from '../hooks/useAuth'
@@ -291,6 +303,9 @@ export default function Room() {
   const [gitBranch, setGitBranch] = useState('main')
   const [gitHead, setGitHead] = useState<string | null>(null)
   const [gitBranches, setGitBranches] = useState<string[]>(['main'])
+  const [ghUser, setGhUser] = useState<GitHubUser | null>(() => loadGitHubUser())
+  const [ghRemote, setGhRemote] = useState<GitHubRemote | null>(() => loadRoomRemote(roomId))
+  const [ghModalOpen, setGhModalOpen] = useState(false)
   const [comments, setComments] = useState<LineComment[]>([])
   const [pendingReveal, setPendingReveal] = useState<{ path: string; line: number } | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
@@ -652,16 +667,229 @@ export default function Room() {
     [readonly, doc, getOrCreateText, createFile, deletePath]
   )
 
-  const onRunTerminalCommand = useCallback(
-    (command: string) => {
+  const applyRemoteFilesToRoom = useCallback(
+    (files: { path: string; content: string }[], mode: 'merge' | 'replace') => {
+      if (readonly || !doc) return { written: 0, conflicts: [] as string[] }
+      const conflicts: string[] = []
+      let written = 0
       const working = workingTreeFromTexts(texts)
+      doc.transact(() => {
+        if (mode === 'replace') {
+          // only overwrite text files present in remote pull; keep local-only files
+        }
+        for (const f of files) {
+          const local = working[f.path]
+          if (local !== undefined && local !== f.content && mode === 'merge') {
+            // conflict: keep both with markers
+            const merged =
+              `<<<<<<< LOCAL (room)\n${local}\n=======\n${f.content}\n>>>>>>> GITHUB\n`
+            const yText = getOrCreateText(f.path)
+            if (yText) {
+              const len = yText.length
+              if (len > 0) yText.delete(0, len)
+              yText.insert(0, merged)
+            } else {
+              createFile(f.path, merged)
+            }
+            conflicts.push(f.path)
+            written++
+            continue
+          }
+          const yText = getOrCreateText(f.path)
+          if (yText) {
+            const len = yText.length
+            if (len > 0) yText.delete(0, len)
+            if (f.content) yText.insert(0, f.content)
+          } else {
+            createFile(f.path, f.content)
+          }
+          written++
+        }
+      })
+      return { written, conflicts }
+    },
+    [readonly, doc, texts, getOrCreateText, createFile]
+  )
+
+  const onRunTerminalCommand = useCallback(
+    async (command: string) => {
+      const trimmed = command.trim()
+      const lower = trimmed.toLowerCase()
+      const working = workingTreeFromTexts(texts)
+
+      // Phase 2 remote intercepts
+      const isRemoteCmd =
+        /^(git\s+)?(pull|push|fetch|remote|pr|clone)\b/.test(lower) ||
+        lower.startsWith('git branch -r')
+
+      if (isRemoteCmd) {
+        const token = loadGitHubToken()
+        const remote = loadRoomRemote(roomId) || ghRemote
+
+        if (lower.match(/^(git\s+)?remote(\s+-v)?$/)) {
+          if (!remote) {
+            return {
+              ok: false,
+              lines: [
+                'No remote linked to this room.',
+                'Open Git → Connect GitHub… and link owner/repo.'
+              ]
+            }
+          }
+          return {
+            ok: true,
+            lines: [
+              `origin  ${remote.url} (${remote.defaultBranch})`,
+              remote.owner + '/' + remote.repo,
+              ghUser ? `auth  @${ghUser.login}` : 'auth  (no token — Connect GitHub)'
+            ]
+          }
+        }
+
+        if (!token || !remote) {
+          return {
+            ok: false,
+            lines: [
+              'GitHub not connected or no remote linked.',
+              'Use Git menu → Connect GitHub… then link owner/repo.',
+              'Token needs repo (or Contents + Pull requests) scope.'
+            ]
+          }
+        }
+
+        if (lower.startsWith('git branch -r') || lower === 'branch -r') {
+          const r = await listBranches(token, remote.owner, remote.repo)
+          if (!r.ok) return { ok: false, lines: [r.error] }
+          return { ok: true, lines: r.branches.map((b) => `  origin/${b}`) }
+        }
+
+        if (/^(git\s+)?(pull|fetch)\b/.test(lower)) {
+          const branch = remote.defaultBranch
+          const r = await fetchTreeFiles(token, remote.owner, remote.repo, branch)
+          if (!r.ok) return { ok: false, lines: [`pull failed: ${r.error}`] }
+          const { written, conflicts } = applyRemoteFilesToRoom(r.files, 'merge')
+          // Align local git HEAD snapshot after pull
+          const initResult = execGitCommand('git init', {
+            roomId,
+            author: userAwareness.name,
+            working: workingTreeFromTexts(
+              Object.fromEntries(r.files.map((f) => [f.path, f.content]))
+            )
+          })
+          // Force a commit representing remote tip
+          const st = initResult.state
+          // refresh from room after apply
+          refreshGitStatus()
+          const lines = [
+            `Pulled ${remote.owner}/${remote.repo}@${branch}`,
+            `commit ${r.commitSha.slice(0, 7)}`,
+            `Updated ${written} file(s) in the room.`
+          ]
+          if (conflicts.length) {
+            lines.push(
+              `Conflicts in ${conflicts.length} file(s) — search for <<<<<<< LOCAL:`,
+              ...conflicts.slice(0, 12).map((p) => `  ${p}`)
+            )
+          }
+          return { ok: true, lines }
+        }
+
+        if (/^(git\s+)?push\b/.test(lower)) {
+          let message = `Update from collab room ${roomId}`
+          const m = trimmed.match(/-m\s+"([^"]+)"|-m\s+'([^']+)'|-m\s+(\S+)/)
+          if (m) message = m[1] || m[2] || m[3]
+          const r = await pushTree(
+            token,
+            remote.owner,
+            remote.repo,
+            remote.defaultBranch,
+            working,
+            message,
+            userAwareness.name
+          )
+          if (!r.ok) return { ok: false, lines: [`push failed: ${r.error}`] }
+          // Mirror as local commit
+          execGitCommand('git add .', { roomId, author: userAwareness.name, working })
+          execGitCommand(`git commit -m "${message.replace(/"/g, '\\"')}"`, {
+            roomId,
+            author: userAwareness.name,
+            working
+          })
+          refreshGitStatus()
+          return {
+            ok: true,
+            lines: [
+              `Pushed to ${remote.owner}/${remote.repo}@${remote.defaultBranch}`,
+              `commit ${r.commitSha.slice(0, 7)}`,
+              r.url
+            ]
+          }
+        }
+
+        if (/^(git\s+)?pr(\s+create)?\b/.test(lower) || lower === 'git pr create') {
+          const head = gitBranch || remote.defaultBranch
+          const base = remote.defaultBranch
+          if (head === base) {
+            return {
+              ok: false,
+              lines: [
+                `Head branch is '${head}' (same as base).`,
+                'Create/switch to a feature branch first: git branch feature/x && git switch feature/x',
+                'Then push and: git pr create'
+              ]
+            }
+          }
+          // Ensure branch exists on remote by pushing head tip of working tree
+          const push = await pushTree(
+            token,
+            remote.owner,
+            remote.repo,
+            head,
+            working,
+            `collab: ${head}`,
+            userAwareness.name
+          )
+          if (!push.ok) {
+            return { ok: false, lines: [`Could not push head '${head}': ${push.error}`] }
+          }
+          const title = `Collab: ${head}`
+          const pr = await createPullRequest(
+            token,
+            remote.owner,
+            remote.repo,
+            head,
+            base,
+            title,
+            `Opened from collab-editor room \`${roomId}\`.`
+          )
+          if (!pr.ok) return { ok: false, lines: [`PR failed: ${pr.error}`] }
+          return {
+            ok: true,
+            lines: [
+              `Created PR #${pr.pr.number}: ${pr.pr.title}`,
+              pr.pr.html_url
+            ]
+          }
+        }
+
+        if (/^(git\s+)?clone\b/.test(lower)) {
+          return {
+            ok: false,
+            lines: [
+              'clone: link an existing repo via Git → Connect GitHub, then git pull.',
+              'Creating a new room from a repo is a future enhancement.'
+            ]
+          }
+        }
+      }
+
+      // Phase 1 local
       const result = execGitCommand(command, {
         roomId,
         author: userAwareness.name,
         working,
         onRestoreFile: restoreFileContent
       })
-      // Refresh status after any git mutation
       const state = result.state
       const status = state.initialized ? computeStatus(state, workingTreeFromTexts(texts)) : []
       setGitStatus(status)
@@ -677,7 +905,17 @@ export default function Room() {
       }
       return { ok: result.ok, lines: result.lines }
     },
-    [texts, roomId, userAwareness.name, restoreFileContent]
+    [
+      texts,
+      roomId,
+      userAwareness.name,
+      restoreFileContent,
+      ghRemote,
+      ghUser,
+      gitBranch,
+      applyRemoteFilesToRoom,
+      refreshGitStatus
+    ]
   )
 
   const openFile = useCallback(
@@ -1630,6 +1868,8 @@ if (!ready) {
                   onRunCommand={onRunTerminalCommand}
                   filePaths={Object.keys(texts).sort()}
                   branchNames={gitBranches}
+                  remoteLabel={ghRemote ? `${ghRemote.owner}/${ghRemote.repo}` : null}
+                  onOpenGitHub={() => setGhModalOpen(true)}
                 />
               </div>
             </Panel>
@@ -1642,6 +1882,17 @@ if (!ready) {
           </PanelGroup>
         </div>
       </div>
+
+      <GitHubConnectModal
+        roomId={roomId}
+        open={ghModalOpen}
+        onClose={() => setGhModalOpen(false)}
+        onConnected={(remote, user) => {
+          setGhRemote(remote)
+          if (user) setGhUser(user)
+          else setGhUser(loadGitHubUser())
+        }}
+      />
 
       {showSnapshots && (
         <SnapshotsPanel

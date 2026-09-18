@@ -256,11 +256,13 @@ export function execGitCommand(raw: string, ctx: GitExecContext): GitExecResult 
     case 'pull':
     case 'fetch':
     case 'clone':
+    case 'pr':
       return {
         ok: false,
         lines: [
-          `${sub}: remote operations are Phase 2.`,
-          'Connect GitHub in Phase 2 to push / pull / create PRs.'
+          `${sub}: handled by Phase 2 GitHub layer when connected.`,
+          'Use the Git menu → Connect GitHub, then retry.',
+          'Or: git remote -v | git pull | git push -m "msg" | git pr create'
         ],
         state
       }
@@ -295,7 +297,12 @@ function helpResult(state: LocalGitState): GitExecResult {
       '  git restore --staged <p> Unstage',
       '  git reset HEAD <path>    Unstage (alias)',
       '',
-      'Remote (push/pull/PR) arrives in Phase 2.'
+      'Phase 2 remote (needs GitHub connected):',
+      '  git remote -v           Show linked repo',
+      '  git pull                Pull branch into room',
+      '  git push [-m "msg"]     Push working tree to branch',
+      '  git pr create           Open PR (head → default branch)',
+      '  git branch -r           List remote branches'
     ],
     state
   }
@@ -839,6 +846,11 @@ export function gitAutocomplete(
     'git restore ',
     'git restore --staged ',
     'git init',
+    'git pull',
+    'git push -m ""',
+    'git remote -v',
+    'git pr create',
+    'git branch -r',
     'git help'
   ]
 

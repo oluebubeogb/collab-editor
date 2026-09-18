@@ -28,6 +28,9 @@ interface BottomConsoleProps {
   /** Paths for git add/restore autocomplete */
   filePaths?: string[]
   branchNames?: string[]
+  /** Phase 2 */
+  remoteLabel?: string | null
+  onOpenGitHub?: () => void
 }
 
 type TabId = 'console' | 'terminal' | 'changes'
@@ -43,7 +46,9 @@ export default function BottomConsole({
   onToggleCollapse,
   onRunCommand,
   filePaths = [],
-  branchNames = ['main']
+  branchNames = ['main'],
+  remoteLabel = null,
+  onOpenGitHub
 }: BottomConsoleProps) {
   const [tab, setTab] = useState<TabId>('console')
   const [termLines, setTermLines] = useState<TerminalLine[]>([
@@ -255,6 +260,10 @@ export default function BottomConsole({
                 { label: 'Log', cmd: 'git log --oneline' },
                 { label: 'Diff', cmd: 'git diff' },
                 { label: 'Init repo', cmd: 'git init' },
+                { label: 'Pull', cmd: 'git pull' },
+                { label: 'Push…', cmd: 'git push -m "' },
+                { label: 'Create PR', cmd: 'git pr create' },
+                { label: 'Remote -v', cmd: 'git remote -v' },
                 { label: 'Help', cmd: 'git help' }
               ].map((item) => (
                 <button
@@ -275,6 +284,17 @@ export default function BottomConsole({
                   <span className="ml-auto text-[10px] text-ink-faint font-mono">{item.cmd}</span>
                 </button>
               ))}
+              {onOpenGitHub && (
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-brand hover:bg-brand-dim border-t"
+                  style={{ borderColor: 'var(--line)' }}
+                  onClick={() => onOpenGitHub()}
+                >
+                  <i className="fa-brands fa-github" />
+                  {remoteLabel ? `Remote: ${remoteLabel}` : 'Connect GitHub…'}
+                </button>
+              )}
             </div>
           </details>
         </div>
@@ -418,6 +438,12 @@ export default function BottomConsole({
                   <span className="ml-2 text-ink-soft">HEAD {gitHead.slice(0, 7)}</span>
                 ) : (
                   <span className="ml-2">(no commits)</span>
+                )}
+                {remoteLabel && (
+                  <div className="mt-0.5 text-[10px]">
+                    <i className="fa-brands fa-github mr-1" />
+                    <span className="text-ink-soft">{remoteLabel}</span>
+                  </div>
                 )}
               </div>
               {gitStatus.length === 0 ? (
