@@ -61,14 +61,36 @@ export default function BottomConsole({
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [sugIdx, setSugIdx] = useState(0)
   const [busy, setBusy] = useState(false)
+  const [gitMenuOpen, setGitMenuOpen] = useState(false)
+  const [gitMenuPos, setGitMenuPos] = useState<{ left: number; bottom: number }>({ left: 0, bottom: 0 })
   const termEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const gitBtnRef = useRef<HTMLButtonElement>(null)
+  const gitMenuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (tab === 'terminal') {
       termEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
   }, [termLines, tab])
+
+  useEffect(() => {
+    if (!gitMenuOpen) return
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (gitMenuRef.current?.contains(t) || gitBtnRef.current?.contains(t)) return
+      setGitMenuOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setGitMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [gitMenuOpen])
 
   const updateSuggestions = useCallback(
     (value: string) => {
@@ -193,14 +215,15 @@ export default function BottomConsole({
 
   return (
     <div
-      className="flex flex-col border-t shrink-0 relative"
+      className="flex flex-col border-t shrink-0 relative overflow-visible"
       style={{
         borderColor: 'var(--line)',
         background: 'var(--surface-console)',
-        height: collapsed ? 32 : 180
+        height: collapsed ? 32 : 180,
+        zIndex: gitMenuOpen ? 50 : 1
       }}
     >
-      <div className="flex h-8 items-center gap-1 border-b px-2" style={{ borderColor: 'var(--line)' }}>
+      <div className="flex h-8 items-center gap-1 border-b px-2 relative z-[60] overflow-visible shrink-0" style={{ borderColor: 'var(--line)' }}>
         <button
           type="button"
           onClick={() => setTab('console')}
@@ -239,19 +262,44 @@ export default function BottomConsole({
           )}
         </button>
 
-        <div className="relative ml-1">
-          <details className="group">
-            <summary
-              className="list-none cursor-pointer px-2 py-0.5 text-[11px] font-medium rounded text-ink-soft hover:text-ink hover:bg-brand-dim/40 flex items-center gap-1"
-              title="Git commands"
-            >
-              <i className="fa-brands fa-git-alt text-[12px]" />
-              Git
-              <i className="fa-solid fa-chevron-down text-[8px] opacity-60" />
-            </summary>
+        <div className="relative ml-1 shrink-0">
+          <button
+            ref={gitBtnRef}
+            type="button"
+            title="Git commands"
+            onClick={() => {
+              setGitMenuOpen((v) => {
+                const next = !v
+                if (next && gitBtnRef.current) {
+                  const r = gitBtnRef.current.getBoundingClientRect()
+                  setGitMenuPos({
+                    left: Math.min(r.left, window.innerWidth - 280),
+                    bottom: window.innerHeight - r.top + 4
+                  })
+                }
+                return next
+              })
+            }}
+            className={`px-2 py-0.5 text-[11px] font-medium rounded flex items-center gap-1 ${
+              gitMenuOpen ? 'text-brand bg-brand-dim' : 'text-ink-soft hover:text-ink hover:bg-brand-dim/40'
+            }`}
+          >
+            <i className="fa-brands fa-git-alt text-[12px]" />
+            Git
+            <i className={`fa-solid fa-chevron-${gitMenuOpen ? 'up' : 'down'} text-[8px] opacity-60`} />
+          </button>
+          {gitMenuOpen && (
             <div
-              className="absolute left-0 top-full z-50 mt-1 min-w-[220px] rounded-md border py-1 shadow-lg"
-              style={{ background: 'var(--surface)', borderColor: 'var(--line)' }}
+              ref={gitMenuRef}
+              className="fixed z-[9999] w-[260px] max-h-[min(340px,calc(100vh-80px))] overflow-y-auto rounded-md border py-1 shadow-xl"
+              style={{
+                left: gitMenuPos.left,
+                bottom: gitMenuPos.bottom,
+                background: 'var(--surface)',
+                borderColor: 'var(--line)',
+                boxShadow: '0 8px 28px rgba(0,0,0,0.4)'
+              }}
+              role="menu"
             >
               {[
                 { label: 'Status', cmd: 'git status' },
@@ -269,8 +317,10 @@ export default function BottomConsole({
                 <button
                   key={item.cmd}
                   type="button"
-                  className="flex w-full items-center px-3 py-1.5 text-left text-[11px] text-ink-soft hover:bg-brand-dim hover:text-ink"
+                  role="menuitem"
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-ink-soft hover:bg-brand-dim hover:text-ink"
                   onClick={() => {
+                    setGitMenuOpen(false)
                     setTab('terminal')
                     if (item.cmd.endsWith('"')) {
                       setInput(item.cmd)
@@ -280,23 +330,31 @@ export default function BottomConsole({
                     }
                   }}
                 >
-                  {item.label}
-                  <span className="ml-auto text-[10px] text-ink-faint font-mono">{item.cmd}</span>
+                  <span className="shrink-0">{item.label}</span>
+                  <span className="ml-auto text-[10px] text-ink-faint font-mono truncate max-w-[140px]">
+                    {item.cmd}
+                  </span>
                 </button>
               ))}
               {onOpenGitHub && (
                 <button
                   type="button"
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-brand hover:bg-brand-dim border-t"
-                  style={{ borderColor: 'var(--line)' }}
-                  onClick={() => onOpenGitHub()}
+                  role="menuitem"
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-brand hover:bg-brand-dim border-t sticky bottom-0"
+                  style={{ borderColor: 'var(--line)', background: 'var(--surface)' }}
+                  onClick={() => {
+                    setGitMenuOpen(false)
+                    onOpenGitHub()
+                  }}
                 >
                   <i className="fa-brands fa-github" />
-                  {remoteLabel ? `Remote: ${remoteLabel}` : 'Connect GitHub…'}
+                  <span className="truncate">
+                    {remoteLabel ? `Remote: ${remoteLabel}` : 'Connect GitHub…'}
+                  </span>
                 </button>
               )}
             </div>
-          </details>
+          )}
         </div>
 
         <div className="flex-1" />
